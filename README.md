@@ -523,7 +523,7 @@ $  python dse-client.py
 
 Setting up Cassandra on Kubernetes using StatefuleSets and headless services with the Datastax operator and Istio for SNI routing is very powerful but can be complex. In this blog post we saw ONE approach to doing this, however there are other options with their own tradeoffs. One part we did not cover in this blog is creating the correct certificates and SANs for each of the nodes. Please [reach out to us][contact] if you need help with this kind of pattern or Istio support in general. 
 
-
+Special thanks to [Joe Searcy](https://twitter.com/jmsearcy) and [Vijay Kumar](https://www.linkedin.com/in/vijay-kumar-antony-swamy-0532b1105/) of T-Mobile for their contribution to this effort!
 
 
 [sni]: https://en.wikipedia.org/wiki/Server_Name_Indication
