@@ -139,6 +139,53 @@ dse-dc1-default-sts-1            0/3     Init:0/2   0          13s
 dse-dc1-default-sts-2            0/3     Init:0/2   0          13s
 ```
 
+We also see the headless services that were created for this SatefuleSet:
+
+```
+$  kubectl get svc
+NAME                                  TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)                      AGE
+cass-operator-metrics                 ClusterIP   10.8.66.157   <none>        8383/TCP,8686/TCP            4h14m
+cassandradatacenter-webhook-service   ClusterIP   10.8.74.74    <none>        443/TCP                      4h14m
+dse-dc1-all-pods-service              ClusterIP   None          <none>        9042/TCP,8080/TCP,9103/TCP   4h6m
+dse-dc1-service                       ClusterIP   None          <none>        9042/TCP,8080/TCP,9103/TCP   4h6m
+dse-seed-service                      ClusterIP   None          <none>        <none>    
+
+```
+
+Following the Kubernetes Service rules for StatefulSets, we can address each of the pods with the following hostnames:
+
+* `dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local`
+* `dse-dc1-default-sts-1.dse-dc1-service.cass-operator.svc.cluster.local`
+* `dse-dc1-default-sts-2.dse-dc1-service.cass-operator.svc.cluster.local`
+
+However, Istio does not know about these DNS names. Istio does know about the headless services and can pull the EDS/endpoints for these, but it does not know about the specific DNS names. We can create those explicitly that look something like this for each host:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: dse-dc1-sts-0-se
+  namespace: cass-operator
+spec:
+  hosts:
+  - dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local
+  location: MESH_INTERNAL
+  ports:
+  - name: cassanda
+    number: 9042
+    protocol: TLS
+  resolution: DNS
+```
+
+Let's create all of the service entries:
+
+```
+$  kubectl apply -f dse-ingressgateway-serviceentry.yaml
+serviceentry.networking.istio.io/dse-dc1-sts-0-se created
+serviceentry.networking.istio.io/dse-dc1-sts-1-se created
+serviceentry.networking.istio.io/dse-dc1-sts-2-se created
+```
+
 ## Understanding what we've deployed so far
 
 When we configured the `CassandraDatacenter` we configured with the following properties:
@@ -339,8 +386,142 @@ validate = false
 
 ## Using Istio SNI to handle the routing
 
-Imagine we have more than just the Cassandra database listening on the `9042` port or we need to secure and address each node individually. We can use [SNI][sni] for more fine-grained routing using Istio. To do that, we need to configure Istio's ingress gateway to use `TLS Passthrough` and configure our Istio routing rules to match on specific SNI hostnames. Let's take a look.
+Imagine we have more than just the Cassandra database listening on the `9042` port or we need to secure and address each node individually. We can use [SNI][sni] for more fine-grained routing using Istio. To do that, we need to configure [Istio's ingress gateway to use][istio-sni] `TLS Passthrough` and configure our Istio routing rules to match on specific SNI hostnames. Let's take a look.
 
+The first thing we need to do is configure the Istio ingress gateway to treat the connections on port `9042` as TLS and use `PASSTHROUGH` semantics. This means the Istio ingress gateway will NOT try to terminate the TLS connection and will try to route it according to the Hostname present in the Server Name TLS extension (SNI) exchanged in the TLS `ClientHello` part of the handshake. We can configure the Istio ingress gateway like this:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: cassandra-tcp-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 9042
+      name: tcp-cassandra-sni
+      protocol: TLS
+    hosts:
+    - "*"
+    tls:
+      mode: PASSTHROUGH
+```
+
+Note we are just passing through any Hostname, though we could be very selective as required. We will match using an Istio `VirtualService`:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: sni-dsw-vs-from-gw
+spec:
+  hosts:
+  - "dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local"
+  - "dse-dc1-default-sts-1.dse-dc1-service.cass-operator.svc.cluster.local"
+  - "dse-dc1-default-sts-2.dse-dc1-service.cass-operator.svc.cluster.local"
+  - "8717bdb7-d879-459e-979a-f1fa6795e88a"
+  - "c8617bd4-af31-45c5-9d12-01c0247c7f8b"
+  - "6eec31c9-af22-4438-a416-8f78fe0693f2"  
+  gateways:
+  - cassandra-tcp-gateway
+  tls:
+  - match:
+    - port: 9042
+      sniHosts:
+        - "c8617bd4-af31-45c5-9d12-01c0247c7f8b"
+        - dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local
+    route:
+    - destination:
+        host: dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local
+        port:
+          number: 9042
+  - match:
+    - port: 9042
+      sniHosts:
+        - "6eec31c9-af22-4438-a416-8f78fe0693f2"
+        - dse-dc1-default-sts-1.dse-dc1-service.cass-operator.svc.cluster.local
+    route:
+    - destination:
+        host: dse-dc1-default-sts-1.dse-dc1-service.cass-operator.svc.cluster.local
+        port:
+          number: 9042
+  - match:
+    - port: 9042
+      sniHosts:
+        - dse-dc1-default-sts-2.dse-dc1-service.cass-operator.svc.cluster.local
+        - "8717bdb7-d879-459e-979a-f1fa6795e88a"
+    route:
+    - destination:
+        host: dse-dc1-default-sts-2.dse-dc1-service.cass-operator.svc.cluster.local
+        port:
+          number: 9042   
+```
+
+In this `VirtualService` we are explicitly matching on the hostnames that make up the Cassandra database. One important part to this puzzle is that under the covers the Cassandra client discovers the Cassandra nodes based on their HostID (that's the UUID strings you see above). So to correctly set up our `VirtualService` we need to be able to match SNI names based on their Kubernetes DNS names as well as the internal Cassandra HostIDs. You can figure out the HostIDs and match them up to their respective Pod IP address by running the following:
+
+```
+$  kubectl exec -it -n cass-operator -c cassandra dse-dc1-default-sts-0 -- nodetool status
+
+Datacenter: dc1
+===============
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving/Stopped
+--  Address     Load       Tokens       Owns (effective)  Host ID                               Rack
+UN  10.20.1.7   236.97 KiB  1            100.0%            8717bdb7-d879-459e-979a-f1fa6795e88a  default
+UN  10.20.0.7   232.38 KiB  1            100.0%            c8617bd4-af31-45c5-9d12-01c0247c7f8b  default
+UN  10.20.2.10  171.54 KiB  1            100.0%            6eec31c9-af22-4438-a416-8f78fe0693f2  default
+```
+
+You can use the Pod IP addresses listed here to match them up.
+
+Let's create and apply our `VirtualService`:
+
+```
+$  kubectl apply -f dse-ingressgateway-sni.yaml
+
+gateway.networking.istio.io/cassandra-tcp-gateway configured
+virtualservice.networking.istio.io/sni-dsw-vs-from-gw created
+```
+
+At this point, we have Istio configured to use SNI routing for the Cassandra client. In the next section, we try connect a client to this configuration.
+
+## Connecting a TLS client to Cassandra with Istio SNI routing in place
+
+At this point, we have set up the following architecture:
+
+![](./img/Arch.png)
+
+Now we just need a suitable client to test this out. Unfortunately the default `cqlsh` CLI client does not send SNI headers, so we need to use another client. We've included a simple Python client with the following configuration:
+
+```bash
+export CQLSH_HOST=dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local
+export CQL_USER=dse-superuser
+export CQL_PASSWORD=W_NYIVMR3TvPUwSFHDdt9r9xfn88QQ5F6LYwWMY_vDyY9WiVwQ5oHw
+export CQLSH_PORT=9042 
+export SSL_CERTFILE=dc1-root-ca.pem
+```
+
+Let's source the env file (`dse-client.env`) and run the python client:
+
+```
+$  source dse-client.env
+$  python dse-client.py
+
+2020-10-12 07:47:07,547 [WARNING] cassandra.cluster: Cluster.__init__ called with contact_points specified, but no load_balancing_policy. In the next major version, this will raise an error; please specify a load-balancing policy. (contact_points = [<SniEndPoint: dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local:9042:dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local>], lbp = None)
+2020-10-12 07:47:08,357 [INFO] cassandra.policies: Using datacenter 'dc1' for DCAwareRoundRobinPolicy (via host 'dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local:9042:dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local'); if incorrect, please specify a local_dc to the constructor, or limit contact points to local cluster nodes
+2020-10-12 07:47:08,358 [INFO] cassandra.cluster: New Cassandra host <Host: dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local:9042:6eec31c9-af22-4438-a416-8f78fe0693f2 dc1> discovered
+2020-10-12 07:47:08,359 [INFO] cassandra.cluster: New Cassandra host <Host: dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local:9042:8717bdb7-d879-459e-979a-f1fa6795e88a dc1> discovered
+2020-10-12 07:47:09,723 [INFO] root: key        col1    col2
+2020-10-12 07:47:09,723 [INFO] root: ---        ----    ----
+2020-10-12 07:47:09,783 [INFO] root: got a row
+2020-10-12 07:47:09,783 [INFO] root: dse        dc1
+```
+
+## Conclusion
+
+Setting up Cassandra on Kubernetes using StatefuleSets and headless services with the Datastax operator and Istio for SNI routing is very powerful but can be complex. In this blog post we saw ONE approach to doing this, however there are other options with their own tradeoffs. One part we did not cover in this blog is creating the correct certificates and SANs for each of the nodes. Please [reach out to us][contact] if you need help with this kind of pattern or Istio support in general. 
 
 
 
@@ -360,3 +541,4 @@ Imagine we have more than just the Cassandra database listening on the `9042` po
 [install-istio]: https://istio.io/latest/docs/setup/install/
 [fine-grained-tls]: https://istio.io/latest/docs/tasks/security/authentication/mtls-migration/#lock-down-to-mutual-tls-by-namespace
 [cqlsh]: https://cassandra.apache.org/doc/latest/tools/cqlsh.html
+[istio-sni]: https://istio.io/latest/docs/tasks/traffic-management/ingress/ingress-sni-passthrough/
