@@ -1,0 +1,32 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: cassandra-tcp-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 9042
+      name: tcp-cassandra
+      protocol: TCP
+    hosts:
+    - "*"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: tcp-echo-vs-from-gw
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - cassandra-tcp-gateway
+  tcp:
+  - match:
+    - port: 9042
+    route:
+    - destination:
+        host: dse-dc1-service.cass-operator.svc.cluster.local
+        port:
+          number: 9042

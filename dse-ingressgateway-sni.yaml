@@ -1,0 +1,107 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: cassandra-tcp-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 9042
+      name: tcp-cassandra-sni
+      protocol: TLS
+    hosts:
+    - "*"
+    tls:
+      mode: PASSTHROUGH
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: sni-dsw-vs-from-gw
+spec:
+  hosts:
+  - "dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local"
+  - "dse-dc1-default-sts-1.dse-dc1-service.cass-operator.svc.cluster.local"
+  - "dse-dc1-default-sts-2.dse-dc1-service.cass-operator.svc.cluster.local"
+  - "8717bdb7-d879-459e-979a-f1fa6795e88a"
+  - "c8617bd4-af31-45c5-9d12-01c0247c7f8b"
+  - "6eec31c9-af22-4438-a416-8f78fe0693f2"  
+  gateways:
+  - cassandra-tcp-gateway
+  tls:
+  - match:
+    - port: 9042
+      sniHosts:
+        - "c8617bd4-af31-45c5-9d12-01c0247c7f8b"
+        - dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local
+    route:
+    - destination:
+        host: dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local
+        port:
+          number: 9042
+  - match:
+    - port: 9042
+      sniHosts:
+        - "6eec31c9-af22-4438-a416-8f78fe0693f2"
+        - dse-dc1-default-sts-1.dse-dc1-service.cass-operator.svc.cluster.local
+    route:
+    - destination:
+        host: dse-dc1-default-sts-1.dse-dc1-service.cass-operator.svc.cluster.local
+        port:
+          number: 9042
+  - match:
+    - port: 9042
+      sniHosts:
+        - dse-dc1-default-sts-2.dse-dc1-service.cass-operator.svc.cluster.local
+        - "8717bdb7-d879-459e-979a-f1fa6795e88a"
+    route:
+    - destination:
+        host: dse-dc1-default-sts-2.dse-dc1-service.cass-operator.svc.cluster.local
+        port:
+          number: 9042   
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: dse-dc1-sts-0-se
+  namespace: cass-operator
+spec:
+  hosts:
+  - dse-dc1-default-sts-0.dse-dc1-service.cass-operator.svc.cluster.local
+  location: MESH_INTERNAL
+  ports:
+  - name: cassanda
+    number: 9042
+    protocol: TLS
+  resolution: DNS
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: dse-dc1-sts-1-se
+  namespace: cass-operator
+spec:
+  hosts:
+  - dse-dc1-default-sts-1.dse-dc1-service.cass-operator.svc.cluster.local
+  location: MESH_INTERNAL
+  ports:
+  - name: cassanda
+    number: 9042
+    protocol: TLS
+  resolution: DNS     
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: dse-dc1-sts-2-se
+  namespace: cass-operator
+spec:
+  hosts:
+  - dse-dc1-default-sts-2.dse-dc1-service.cass-operator.svc.cluster.local
+  location: MESH_INTERNAL
+  ports:
+  - name: cassanda
+    number: 9042
+    protocol: TLS
+  resolution: DNS                                    

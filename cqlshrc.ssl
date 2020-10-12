@@ -1,0 +1,11 @@
+[authentication]
+username = dse-superuser
+password = W_NYIVMR3TvPUwSFHDdt9r9xfn88QQ5F6LYwWMY_vDyY9WiVwQ5oHw
+
+[connection]
+hostname = 127.0.0.1
+port = 9042
+ 
+[ssl]
+certfile = ./dc1-root-ca.pem
+validate = false 
